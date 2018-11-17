@@ -105,7 +105,8 @@ public class NetworkSelectListPreference extends ListPreference
         new AsyncTask<Void, Void, List<String>>() {
             @Override
             protected List<String> doInBackground(Void... voids) {
-                return Arrays.asList(telephonyManager.getForbiddenPlmns());
+                String[] forbiddenPlmns = telephonyManager.getForbiddenPlmns();
+                return forbiddenPlmns != null ? Arrays.asList(forbiddenPlmns) : null;
             }
 
             @Override
@@ -317,14 +318,15 @@ public class NetworkSelectListPreference extends ListPreference
         mProgressDialog = progressDialog;
         mNeedScanAgain = false;
 
-        if (SubscriptionManager.isValidSubscriptionId(mSubId)) {
-            mPhoneId = SubscriptionManager.getPhoneId(mSubId);
-        }
-
         TelephonyManager telephonyManager = (TelephonyManager)
                 getContext().getSystemService(Context.TELEPHONY_SERVICE);
 
-        setSummary(telephonyManager.getNetworkOperatorName());
+        if (SubscriptionManager.isValidSubscriptionId(mSubId)) {
+            mPhoneId = SubscriptionManager.getPhoneId(mSubId);
+            setSummary(telephonyManager.getNetworkOperatorName(mSubId));
+        } else {
+            setSummary(telephonyManager.getNetworkOperatorName());
+        }
 
         setOnPreferenceChangeListener(this);
     }

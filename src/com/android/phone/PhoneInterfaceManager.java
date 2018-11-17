@@ -194,6 +194,7 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
     private static final int EVENT_GET_FORBIDDEN_PLMNS_DONE = 49;
     private static final int CMD_SWITCH_SLOTS = 50;
     private static final int EVENT_SWITCH_SLOTS_DONE = 51;
+    private static final int CMD_TOGGLE_2G = 998;
 
     // Parameters of select command.
     private static final int SELECT_COMMAND = 0xA4;
@@ -216,6 +217,7 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
     private MainThreadHandler mMainThreadHandler;
     private SubscriptionController mSubscriptionController;
     private SharedPreferences mTelephonySharedPreferences;
+    private int pNetwork;
 
     private static final String PREF_CARRIERS_ALPHATAG_PREFIX = "carrier_alphtag_";
     private static final String PREF_CARRIERS_NUMBER_PREFIX = "carrier_number_";
@@ -1200,6 +1202,38 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
         mApp.startActivity(intent);
     }
 
+    public void toggle2G(boolean on) {
+        int network = -1;
+        final int phoneSubId = mSubscriptionController.getDefaultDataSubId();
+        Phone aphone = getPhone(phoneSubId);
+
+        if (on) {
+            if(phoneSubId != 0) {
+                pNetwork = android.provider.Settings.Global.getInt(mApp.getContentResolver(),
+                    android.provider.Settings.Global.PREFERRED_NETWORK_MODE + phoneSubId, 0);
+            } else {
+                pNetwork = android.provider.Settings.Global.getInt(mApp.getContentResolver(),
+                    android.provider.Settings.Global.PREFERRED_NETWORK_MODE, 0);
+            }
+            network = Phone.NT_MODE_GSM_ONLY;
+        } else {
+            network = pNetwork;
+        }
+
+        aphone.setPreferredNetworkType(network,
+                mMainThreadHandler.obtainMessage(CMD_TOGGLE_2G));
+        if(phoneSubId != 0) {
+            android.provider.Settings.Global.putInt(mApp.getContentResolver(),
+                android.provider.Settings.Global.PREFERRED_NETWORK_MODE + phoneSubId, network);
+        } else {
+            android.provider.Settings.Global.putInt(mApp.getContentResolver(),
+                android.provider.Settings.Global.PREFERRED_NETWORK_MODE, network);
+        }
+
+        log("DefaultSubId: " + phoneSubId);
+        log("NetworkType: " + network);
+    }
+
     /**
      * End a call based on call state
      * @return true is a call was ended
@@ -1716,6 +1750,10 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
         // registered cell info, so return a NULL country instead.
         final long identity = Binder.clearCallingIdentity();
         try {
+            if (phoneId == SubscriptionManager.INVALID_PHONE_INDEX) {
+                // Get default phone in this case.
+                phoneId = SubscriptionManager.DEFAULT_PHONE_INDEX;
+            }
             final int subId = mSubscriptionController.getSubIdUsingPhoneId(phoneId);
             // Todo: fix this when we can get the actual cellular network info when the device
             // is on IWLAN.
@@ -2745,15 +2783,6 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
     }
 
     /**
-     * @return true if the IMS resolver is busy resolving a binding and should not be considered
-     * available, false if the IMS resolver is idle.
-     */
-    public boolean isResolvingImsBinding() {
-        enforceModifyPermission();
-        return PhoneFactory.getImsResolver().isResolvingBinding();
-    }
-
-    /**
      * Sets the ImsService Package Name that Telephony will bind to.
      *
      * @param slotId the slot ID that the ImsService should bind for.
@@ -3683,7 +3712,7 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
         synchronized (mLastModemActivityInfo) {
             ModemActivityInfo info = (ModemActivityInfo) sendRequest(CMD_GET_MODEM_ACTIVITY_INFO,
                     null);
-            if (info != null) {
+            if (isModemActivityInfoValid(info)) {
                 int[] mergedTxTimeMs = new int[ModemActivityInfo.TX_POWER_LEVELS];
                 for (int i = 0; i < mergedTxTimeMs.length; i++) {
                     mergedTxTimeMs[i] =
@@ -3710,6 +3739,25 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
         Bundle bundle = new Bundle();
         bundle.putParcelable(TelephonyManager.MODEM_ACTIVITY_RESULT_KEY, ret);
         result.send(0, bundle);
+    }
+
+    // Checks that ModemActivityInfo is valid. Sleep time, Idle time, Rx time and Tx time should be
+    // less than total activity duration.
+    private boolean isModemActivityInfoValid(ModemActivityInfo info) {
+        if (info == null) {
+            return false;
+        }
+        int activityDurationMs =
+            (int) (info.getTimestamp() - mLastModemActivityInfo.getTimestamp());
+        int totalTxTimeMs = 0;
+        for (int i = 0; i < info.getTxTimeMillis().length; i++) {
+            totalTxTimeMs += info.getTxTimeMillis()[i];
+        }
+        return (info.isValid()
+            && (info.getSleepTimeMillis() <= activityDurationMs)
+            && (info.getIdleTimeMillis() <= activityDurationMs)
+            && (info.getRxTimeMillis() <= activityDurationMs)
+            && (totalTxTimeMs <= activityDurationMs));
     }
 
     /**
